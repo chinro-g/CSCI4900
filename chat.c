@@ -36,16 +36,14 @@ char random_char(int);
 unsigned char hmac(unsigned char, char);
 static dhKey client_ephemeral;
 static dhKey server_ephemeral;
-unsigned char serverDH[128];
+//unsigned char mainDH[128];
 unsigned char clientDH[128];
-
+unsigned char serverDH[128];
 
 #define max(a, b)         \
 	({ typeof(a) _a = a;    \
 	 typeof(b) _b = b;    \
 	 _a > _b ? _a : _b; })
-
-
 
 /* network stuff... */
 
@@ -87,19 +85,14 @@ int initServerNet(int port)
 	close(listensock);
 
 	fprintf(stderr, "connection made, starting session...\n");
+
 	/* at this point, should be able to send/recv on sockfd */
-		
-	//sleep(2);
 
 	fprintf(stderr, "Grabbing client key from socket...\n");
-    //if(deserialize_mpz(client_ephemeral.PK,sockfd)!=0)
-    //    error("ERROR receiving server's ephemeral key");
+    if(deserialize_mpz(client_ephemeral.PK,sockfd)!=0)
+        error("ERROR receiving server's ephemeral key");
 
-	fprintf(stderr, "Sending server key to the socket...\n");
-    //if (serialize_mpz(sockfd,server_ephemeral.PK)==0)
-    //    error("ERROR sending server ephemeral key");
-
-    dhFinal(server_ephemeral.SK,server_ephemeral.PK,client_ephemeral.PK,serverDH,128);
+    dhFinal(server_ephemeral.SK,server_ephemeral.PK,client_ephemeral.PK,clientDH,128);
 
     return 0;
 }
@@ -128,21 +121,13 @@ static int initClientNet(char* hostname, int port)
 	serv_addr.sin_port = htons(port);
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
 		error("ERROR connecting");
+
 	/* at this point, should be able to send/recv on sockfd */
-
-	//sleep(1);
-
-	fprintf(stderr, "Sending client key to the socket...\n");
-    //if (serialize_mpz(sockfd,client_ephemeral.PK)==0)
-    //    error("ERROR sending server ephemeral key");
+	sleep(2);
 	
-    //sleep(4);
-    fprintf(stderr, "Grabbing server key from socket...\n");
-    //if(deserialize_mpz(client_ephemeral.PK,sockfd)!=0)
-    //    error("ERROR receiving server's ephemeral key");
-
-    dhFinal(client_ephemeral.SK,client_ephemeral.PK,server_ephemeral.PK,clientDH,128);
-
+	fprintf(stderr, "Sending client key to the socket...\n");
+    if (serialize_mpz(sockfd,client_ephemeral.PK)==0)
+        error("ERROR sending server ephemeral key");
 	return 0;
 }
 
@@ -260,7 +245,7 @@ int main(int argc, char *argv[])
 	char mMsg = NULL;
 	const size_t keylength = 128;
     unsigned char prvKeyS[keylength];
-	unsigned char prvKeyC[keylength];
+	unsigned char mainDH[keylength];
 
 	while ((c = getopt_long(argc, argv, "c:lp:h", long_opts, &opt_index)) != -1) {
 		switch (c) {
@@ -293,29 +278,41 @@ int main(int argc, char *argv[])
 	gtk_init(&argc, &argv);
 
 	if (isclient) {
-		printf("\nClient init started\n~~~~~~~~~~~~~~~~~~~~~~~\n");
-		initClientNet(hostname,port);
-		memcpy(prvKeyC,clientDH,128);
-        for (size_t i = 0; i < 128; i++) {
-		    printf("%02x ",clientDH[i]);
-	    }
-		printf("\nClient init complete\n~~~~~~~~~~~~~~~~~~~~~~~\n");
-	}
-	else {
-		printf("\nServer init started\n~~~~~~~~~~~~~~~~~~~~~~~\n");
-		initServerNet(port);
-		memcpy(prvKeyS,serverDH,128);
-        for (size_t i = 0; i < 128; i++) {
-		    printf("%02x ",serverDH[i]);
-	    }
-		printf("\nServer init complete\n~~~~~~~~~~~~~~~~~~~~~~~\n");
-	}
+        printf("\nClient init started\n~~~~~~~~~~~~~~~~~~~~~~~\n");
+        initClientNet(hostname,port);
 
-	printf(stderr, "Client/Server initial exchange complete.  Checking DH key...\n");
-	if (memcmp(prvKeyC,prvKeyS,keylength) != 0) {
-		fprintf(stderr, "Error, keys are not the same.  Ending program...\n");
-		return 1; /*End program.  key are not equal authentication failed.*/
-	} 
+        if(deserialize_mpz(server_ephemeral.PK,sockfd)!=0)
+                fprintf(stderr,"\nERROR receiving server's ephemeral key\n");
+
+        dhFinal(client_ephemeral.SK,client_ephemeral.PK,server_ephemeral.PK,clientDH,128);  
+
+        memcpy(prvKeyS,clientDH,128);
+
+        xwrite(sockfd, clientDH, keylength);
+        
+                for (size_t i = 0; i < 128; i++) {
+            printf("%02x ",clientDH[i]);
+            }
+
+    printf("\nClient init complete\n~~~~~~~~~~~~~~~~~~~~~~~\n");
+     }
+    else {
+        printf("\nServer init started\n~~~~~~~~~~~~~~~~~~~~~~~\n");
+        initServerNet(port);
+        if (serialize_mpz(sockfd,server_ephemeral.PK)==0)
+                fprintf(stderr,"\nERROR sending server ephemeral key\n");
+
+        xread(sockfd, clientDH, keylength);
+
+        memcpy(prvKeyS,serverDH,128);
+
+                for (size_t i = 0; i < 128; i++) {
+            printf("%02x ",serverDH[i]);
+            }
+
+        printf("\nServer init complete\n~~~~~~~~~~~~~~~~~~~~~~~\n");
+    }
+
 
 	builder = gtk_builder_new();
 	if (gtk_builder_add_from_file(builder,"layout.ui",&error) == 0) {
@@ -323,7 +320,8 @@ int main(int argc, char *argv[])
 		g_clear_error(&error);
 		return 1;
 	}
-	mark  = gtk_text_mark_new(NULL,TRUE);
+
+	mark = gtk_text_mark_new(NULL,TRUE);
 	window = gtk_builder_get_object(builder,"window");
 	g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 	transcript = gtk_builder_get_object(builder, "transcript");
